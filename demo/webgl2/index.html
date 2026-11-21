@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MINI3 — WebGL2 Demo</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background: #0d0f14;
+    color: #e8e6e1;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.5;
+  }
+  header {
+    padding: 18px 24px 8px;
+    border-bottom: 1px solid #23262f;
+  }
+  h1 { font-size: 1.3rem; margin: 0 0 2px; font-weight: 600; letter-spacing: 0.2px; }
+  .sub { color: #8a8fa3; font-size: 0.82rem; }
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 16px;
+    padding: 16px 24px;
+    max-width: 1480px;
+  }
+  @media (max-width: 1080px) {
+    main { grid-template-columns: 1fr; }
+  }
+  .stage {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  canvas {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    border-radius: 10px;
+    border: 1px solid #23262f;
+    background: #0d0f14;
+    display: block;
+  }
+  .controls {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    justify-content: center;
+  }
+  button, select, input[type="range"] {
+    background: #1a1d26; color: #e8e6e1;
+    border: 1px solid #2c3040; border-radius: 8px;
+    font-size: 0.85rem; padding: 7px 12px; cursor: pointer;
+  }
+  button:hover { background: #232734; }
+  label { color: #b8bccf; font-size: 0.8rem; }
+  .side {
+    display: flex; flex-direction: column; gap: 12px;
+    font-size: 0.82rem;
+  }
+  .card {
+    background: #14161d; border: 1px solid #23262f; border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .card h2 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: #8a8fa3; margin: 0 0 8px; }
+  .kv { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+  .kv .k { color: #8a8fa3; }
+  .kv .v { color: #e8e6e1; font-variant-numeric: tabular-nums; }
+  .note { color: #9aa0b5; font-size: 0.78rem; line-height: 1.55; }
+  code { background: #23262f; border-radius: 4px; padding: 1px 5px; font-size: 0.78rem; color: #f0c674; }
+  #status { font-size: 0.75rem; color: #9aa0b5; text-align: center; padding-top: 2px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MINI3 <span style="color:#6b7080">/</span> WebGL 2 Backend</h1>
+  <div class="sub">Renderer-agnostic 3D engine · browser demo · rotating, lit cube</div>
+</header>
+<main>
+  <section class="stage">
+    <canvas id="gl-canvas" width="960" height="720" aria-label="3D render"></canvas>
+    <div class="controls">
+      <select id="shading" aria-label="Shading mode">
+        <option value="flat" selected>Flat shading</option>
+        <option value="gouraud">Gouraud shading</option>
+      </select>
+      <select id="auto-rotate" aria-label="Auto-rotate">
+        <option value="on" selected>Auto-rotate · on</option>
+        <option value="off">Auto-rotate · off</option>
+      </select>
+      <label>Pitch <input id="pitch" type="range" min="-60" max="60" value="15" step="1"></label>
+      <label>Yaw <input id="yaw" type="range" min="0" max="360" value="0" step="1"></label>
+      <label>Balls <input id="balls" type="range" min="0" max="6" value="3" step="1"></label>
+      <button id="reset-btn">Reset</button>
+    </div>
+    <div id="status">…</div>
+  </section>
+  <aside class="side">
+    <div class="card">
+      <h2>Scene</h2>
+      <div class="kv"><span class="k">Shape</span><span class="v">Unit cube + N spheres</span></div>
+      <div class="kv"><span class="k">Shading</span><span class="v" id="stat-shading">flat</span></div>
+      <div class="kv"><span class="k">FPS</span><span class="v" id="stat-fps">—</span></div>
+      <div class="kv"><span class="k">Triangles</span><span class="v" id="stat-tris">—</span></div>
+      <div class="kv"><span class="k">Draws</span><span class="v" id="stat-draws">—</span></div>
+    </div>
+    <div class="card">
+      <h2>How to read this</h2>
+      <p class="note">The cube is lit by a single directional light plus ambient. Switch between
+         flat and Gouraud shading to compare per-face vs per-vertex lighting.</p>
+      <p class="note">This page renders with the same contract as the native backends (mock,
+         software, WebGL 2) — see <code>docs/</code>.</p>
+    </div>
+    <div class="card">
+      <h2>Keyboard</h2>
+      <p class="note"><code>F</code> flat shading · <code>G</code> Gouraud · <code>R</code> reset ·
+         <code>space</code> toggle auto-rotate</p>
+    </div>
+  </aside>
+</main>
+
+<script type="module">
+import { WebGL2Backend, makeCubeMesh, SHADING } from '../../backends/webgl2/m3-webgl2-backend.js';
+
+/* ---------------- WebGL setup ---------------- */
+const canvas = document.getElementById('gl-canvas');
+const gl = canvas.getContext('webgl2', { antialias: true, alpha: false });
+
+/* ---------------- Scene ---------------- */
+const state = {
+  shading: SHADING.FLAT,
+  autoRotate: true,
+  pitch: 15,
+  yaw: 0,
+  balls: 3,
+  time: 0,
+};
+
+const STATUS = document.getElementById('status');
+const statFps = document.getElementById('stat-fps');
+const statTris = document.getElementById('stat-tris');
+const statDraws = document.getElementById('stat-draws');
+const statShading = document.getElementById('stat-shading');
+
+const renderer = gl ? new WebGL2Backend(gl) : null;
+
+if (!gl) {
+  STATUS.textContent = 'WebGL 2 unavailable — this demo requires WebGL 2.';
+  const btn = document.getElementById('reset-btn');
+  btn.disabled = true;
+} else {
+  STATUS.textContent = 'WebGL 2 initialised — rotating cube + lights.';
+}
+
+/* Camera state — matches m3_camera_look_at from the core. */
+const camera = {
+  eye: [2.2, 1.6, 3.9],
+  target: [0, 0, 0],
+  up: [0, 1, 0],
+  fov: 50,
+  near: 0.1,
+  far: 100,
+};
+
+/* Build a sphere mesh (low-poly, per-face normals like the cube). */
+function makeSphereMesh(radius) {
+  const positions = [];
+  const normals = [];
+  const colors = [];
+  const indices = [];
+  const lat = 12, lon = 16;
+  for (let i = 0; i <= lat; i++) {
+    const phi = Math.PI * i / lat;
+    for (let j = 0; j <= lon; j++) {
+      const theta = 2 * Math.PI * j / lon;
+      const x = Math.sin(phi) * Math.cos(theta);
+      const y = Math.cos(phi);
+      const z = Math.sin(phi) * Math.sin(theta);
+      positions.push(radius * x, radius * y, radius * z);
+      const len = Math.sqrt(x * x + y * y + z * z);
+      normals.push(x / len, y / len, z / len);
+      colors.push(0.75, 0.75, 0.95);
+    }
+  }
+  for (let i = 0; i < lat; i++) {
+    for (let j = 0; j < lon; j++) {
+      const a = i * (lon + 1) + j;
+      const b = a + lon + 1;
+      if (i !== 0 || j !== lon - 1) indices.push(a, b, b + 1);
+      if (i !== lat - 1 || j !== lon - 1) indices.push(a, b + 1, a + 1);
+    }
+  }
+  return { positions, normals, colors, indices, vertexCount: positions.length / 3, indexCount: indices.length };
+}
+
+/* Mat4 helpers — duplicates the backend module's (small, local copies so the
+   demo doesn't depend on private internals). */
+function mat4Identity() {
+  const m = new Float32Array(16); m[0] = 1; m[5] = 1; m[10] = 1; m[15] = 1; return m;
+}
+function mat4Multiply(a, b) {
+  const out = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    out[4 * c + r] = a[4 * 0 + r] * b[4 * c + 0] + a[4 * 1 + r] * b[4 * c + 1] + a[4 * 2 + r] * b[4 * c + 2] + a[4 * 3 + r] * b[4 * c + 3];
+  }
+  return out;
+}
+function mat4Translation(x, y, z) { const m = mat4Identity(); m[12] = x; m[13] = y; m[14] = z; return m; }
+function mat4RotationYaw(yaw) {
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  const m = mat4Identity();
+  m[0] = c;  m[8] = -s;
+  m[2] = s;  m[10] = c;
+  return m;
+}
+function mat4Perspective(fovDeg, aspect, near, far) {
+  const f = 1.0 / Math.tan((fovDeg * Math.PI / 180) * 0.5);
+  const m = new Float32Array(16);
+  m[0] = f / aspect;
+  m[5] = f;
+  m[10] = (far + near) / (near - far);
+  m[11] = -1;
+  m[14] = 2.0 * far * near / (near - far);
+  return m;
+}
+function mat4LookAt(eye, target, up) {
+  let f = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+  const fl = Math.hypot(f[0], f[1], f[2]);
+  if (fl < 1e-12) f = [0, 0, -1]; else f = [f[0] / fl, f[1] / fl, f[2] / fl];
+  let r = [f[1] * up[2] - f[2] * up[1], f[2] * up[0] - f[0] * up[2], f[0] * up[1] - f[1] * up[0]];
+  const rl = Math.hypot(r[0], r[1], r[2]);
+  if (rl < 1e-12) r = [1, 0, 0]; else r = [r[0] / rl, r[1] / rl, r[2] / rl];
+  const u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+  const m = new Float32Array(16);
+  m[0] = r[0]; m[1] = u[0]; m[2] = -f[0];
+  m[4] = r[1]; m[5] = u[1]; m[6] = -f[1];
+  m[8] = r[2]; m[9] = u[2]; m[10] = -f[2];
+  m[12] = -(r[0] * eye[0] + r[1] * eye[1] + r[2] * eye[2]);
+  m[13] = -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]);
+  m[14] = f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2];
+  m[15] = 1;
+  return m;
+}
+
+/* Cache of sphere meshes by radius (shared across frames). */
+const sphereMeshCache = new Map();
+function sphereMeshFor(radius) {
+  const key = radius.toFixed(4);
+  if (!sphereMeshCache.has(key)) {
+    const mesh = makeSphereMesh(radius);
+    sphereMeshCache.set(key, mesh);
+  }
+  return sphereMeshCache.get(key);
+}
+
+/* Build the frame in memory (matches m3_frame_build semantics). */
+function buildFrame(yawDeg, balls, cubeMeshRef, shading) {
+  /* turntable camera: orbit the eye around the target by pitch. The cube also
+     rotates by yaw. */
+  const pitch = state.pitch * Math.PI / 180;
+  const dist = Math.hypot(camera.eye[0], camera.eye[2]);
+  const horiz = Math.cos(pitch) * dist;
+  const height = Math.sin(pitch) * dist;
+  const orbitYaw = Math.atan2(camera.eye[2], camera.eye[0]);
+  const eye = [Math.cos(orbitYaw) * horiz, height, Math.sin(orbitYaw) * horiz];
+  const view = mat4LookAt(eye, camera.target, camera.up);
+  const aspect = canvas.width / canvas.height;
+  const proj = mat4Perspective(camera.fov, aspect, camera.near, camera.far);
+  const cubeModel = mat4Multiply(mat4Translation(0, 0, 0), mat4RotationYaw(yawDeg * Math.PI / 180));
+
+  const draws = [];
+  let tris = 0;
+  draws.push({
+    mesh: cubeMeshRef,
+    material: { diffuse: { x: 0.85, y: 0.55, z: 0.45 } },
+    model: cubeModel,
+  });
+  tris += cubeMeshRef.indexCount / 3;
+
+  /* spheres orbiting */
+  const R = 0.32;
+  const sphereMesh = sphereMeshFor(R);
+  for (let i = 0; i < balls; i++) {
+    const a = (Math.PI * 2 * i / Math.max(balls, 1)) + (yawDeg * Math.PI / 180) * 2;
+    const x = Math.cos(a) * 2.2;
+    const z = Math.sin(a) * 2.2;
+    const y = -0.2 + Math.sin((yawDeg + 30 * i) * Math.PI / 180) * 0.08;
+    draws.push({
+      mesh: sphereMesh,
+      material: { diffuse: { x: 0.75, y: 0.75, z: 0.95 } },
+      model: mat4Translation(x, y, z),
+    });
+    tris += sphereMesh.indexCount / 3;
+  }
+
+  const frame = {
+    view, proj,
+    draws,
+    lights: {
+      ambient: { x: 0.22, y: 0.22, z: 0.3 },
+      directional: [{ direction: { x: 0.4, y: 1.0, z: 0.6 }, color: { x: 1.0, y: 0.95, z: 0.9 } }],
+    },
+  };
+  return { frame, cube: draws[0], spheres: draws.slice(1), tris,
+           sphereCount: balls };
+}
+
+/* ---------------- Render loop ---------------- */
+let lastTs = performance.now();
+let frames = 0;
+let fpsAccum = 0, fpsFrames = 0;
+
+const cubeMesh = makeCubeMesh(1.1);
+let shaderFlat = null, shaderGouraud = null;
+
+function resize() {
+  const ratio = 960 / 720;
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.max(1, Math.round(rect.width * devicePixelRatio));
+  const h = Math.max(1, Math.round(rect.height * devicePixelRatio));
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w; canvas.height = h;
+  }
+}
+
+function render() {
+  resize();
+  if (!gl) return;
+
+  if (renderer) renderer.setViewport(0, 0, canvas.width, canvas.height);
+
+  /* shaders per mode (cached) */
+  if (state.shading === SHADING.FLAT) shaderFlat = renderer.createShader(SHADING.FLAT) || shaderFlat;
+  else shaderGouraud = renderer.createShader(SHADING.GOURAUD) || shaderGouraud;
+  const shader = state.shading === SHADING.FLAT ? shaderFlat : shaderGouraud;
+  if (!shader) return;
+
+  /* geometry resources (cached per mesh identity — key set by object) */
+  if (!cubeMesh._cachedGeometry) cubeMesh._cachedGeometry = renderer.createGeometry(cubeMesh);
+  const cubeGeo = cubeMesh._cachedGeometry;
+
+  const frameData = buildFrame(state.yaw, state.balls, cubeMesh, state.shading);
+  const frame = frameData.frame;
+
+  renderer.beginFrame(frame);
+  /* cube */
+  renderer.submit(frame, frameData.cube, cubeGeo, shader);
+  /* spheres */
+  for (const d of frameData.spheres) {
+    const mesh = d.mesh;
+    if (!mesh._cachedGeometry) mesh._cachedGeometry = renderer.createGeometry(mesh);
+    renderer.submit(frame, d, mesh._cachedGeometry, shader);
+  }
+  renderer.endFrame(frame);
+
+  /* stats */
+  const now = performance.now();
+  frames++;
+  fpsAccum += now - lastTs;
+  lastTs = now;
+  fpsFrames++;
+  if (fpsFrames >= 20) {
+    const avgMs = fpsAccum / fpsFrames;
+    statFps.textContent = Math.round(1000 / avgMs) + ' fps';
+    fpsAccum = 0; fpsFrames = 0;
+  }
+  statTris.textContent = String(frameData.tris);
+  statDraws.textContent = String(frame.draws.length);
+  statShading.textContent = state.shading;
+}
+
+function loop() {
+  if (state.autoRotate) {
+    state.yaw = (state.yaw + 0.55) % 360;
+    yawSlider.value = String(Math.round(state.yaw));
+  }
+  render();
+  requestAnimationFrame(loop);
+}
+
+/* ---------------- UI wiring ---------------- */
+const yawSlider = document.getElementById('yaw');
+const pitchSlider = document.getElementById('pitch');
+const ballsSlider = document.getElementById('balls');
+const shadingSel = document.getElementById('shading');
+const autoRotateSel = document.getElementById('auto-rotate');
+const resetBtn = document.getElementById('reset-btn');
+
+yawSlider.addEventListener('input', () => { state.yaw = parseFloat(yawSlider.value); state.autoRotate = false; autoRotateSel.value = 'off'; });
+pitchSlider.addEventListener('input', () => { state.pitch = parseFloat(pitchSlider.value); });
+ballsSlider.addEventListener('input', () => { state.balls = parseInt(ballsSlider.value, 10); });
+shadingSel.addEventListener('change', () => { state.shading = shadingSel.value === 'gouraud' ? SHADING.GOURAUD : SHADING.FLAT; });
+autoRotateSel.addEventListener('change', () => { state.autoRotate = autoRotateSel.value === 'on'; });
+resetBtn.addEventListener('click', () => {
+  state.yaw = 0; state.pitch = 15; state.balls = 3; state.shading = SHADING.FLAT; state.autoRotate = true;
+  yawSlider.value = '0'; pitchSlider.value = '15'; ballsSlider.value = '3';
+  shadingSel.value = 'flat'; autoRotateSel.value = 'on';
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyF') { state.shading = SHADING.FLAT; shadingSel.value = 'flat'; }
+  if (e.code === 'KeyG') { state.shading = SHADING.GOURAUD; shadingSel.value = 'gouraud'; }
+  if (e.code === 'KeyR') resetBtn.click();
+  if (e.code === 'Space') {
+    state.autoRotate = !state.autoRotate;
+    autoRotateSel.value = state.autoRotate ? 'on' : 'off';
+    e.preventDefault();
+  }
+});
+
+resize();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+# build artifacts
+out/
+build/
+out/
+*.ppm
+*.png
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+
+# editor/OS noise
+*.swp
+.DS_Store
+Thumbs.db
